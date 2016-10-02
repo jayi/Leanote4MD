@@ -9,6 +9,7 @@ import requests
 import json
 import os
 import sys
+import time
 from datetime import datetime
 import dateutil.parser
 from dateutil import tz
@@ -42,9 +43,9 @@ def req_get(url, param = '', type = 'json', token = True):
             param={'token': leanote_token}
 
     s = requests.Session()
-    if leanote_host.startswith('https'):
+    if config['host'].startswith('https'):
         s.mount('https://', SSLAdapter(ssl.PROTOCOL_TLSv1))
-    r = s.get(leanote_host + '/api/' + url, params = param)
+    r = s.get(config['host'] + '/api/' + url, params = param)
     if r.status_code == requests.codes.ok:
         if type=='json':
             if is_ok(r.text):
@@ -72,9 +73,9 @@ def req_post(url, param = '', type = 'json', token = True):
             param={'token': leanote_token}
 
     s = requests.Session()
-    if leanote_host.startswith('https'):
+    if config['host'].startswith('https'):
         s.mount('https://', SSLAdapter(ssl.PROTOCOL_TLSv1))
-    r = s.post(leanote_host + '/api/' + url, data = param)
+    r = s.post(config['host'] + '/api/' + url, data = param)
     if r.status_code == requests.codes.ok:
         if type=='json':
             if is_ok(r.text):
@@ -193,6 +194,15 @@ def readFromFile(filename):
             meta = {}
         return file_content, meta
 
+def needUpdate(path, filename, note):
+    filepath = path + '/' + filename
+    if not os.path.isfile(filepath):
+        return True
+    updatetime = time.mktime(dateutil.parser.parse(note['UpdatedTime']).timetuple())
+    file_modify_time = os.stat(filepath).st_mtime
+    #  print 'update time = ' + str(updatetime)
+    #  print 'file modify time = ' + str(file_modify_time)
+    return updatetime > file_modify_time
 
 def saveToFile(notes, noteBooks, path = '.'):
     unique_noteTitle = set()
@@ -211,8 +221,13 @@ def saveToFile(notes, noteBooks, path = '.'):
             filename += '.md'
         else:
             filename += '.txt'
+
+        if not needUpdate(path, filename, note):
+            continue
+
         try:
-            with open(path + '/' + filename, 'w') as file:
+            filepath = path + '/' + filename
+            with open(filepath, 'w') as file:
                 print 'write file: %s' %filename
                 file.write('title: %s\n' %note['Title'].encode('utf-8'))
 
@@ -250,8 +265,9 @@ def saveToFile(notes, noteBooks, path = '.'):
                     for attach in note['Files']:
                         if not attach['IsAttach']:
                             i = getImage(attach['FileId'])
-                            print 'saving its image: %s.%s' %(attach['FileId'], i.format)
-                            i.save(attach['FileId'] + '.' + i.format)
+                            if config['saveImage']:
+                                print 'saving its image: %s.%s' %(attach['FileId'], i.format)
+                                i.save(attach['FileId'] + '.' + i.format)
 
         except:
             print "error: ", filename
@@ -267,7 +283,8 @@ def LeanoteExportToMD(path = '.'):
         if not notebook['IsDeleted']:
             notesMeta = getNotesMeta(notebook['NotebookId'])
             for noteMeta in notesMeta:
-                    if not noteMeta['IsTrash']:
+                    if not noteMeta['IsTrash'] and noteMeta['IsMarkdown'] \
+                            and (not config['isBlog'] or noteMeta['IsBlog']):
                         note = getNoteDetail(noteMeta['NoteId'])
                         notes.append(note)
     print 'found %d notes' %len(notes)
@@ -314,44 +331,52 @@ def LeanoteImportFromMD(path = '.'):
     logout()
     print 'all done, bye~'
 
+config = {}
+def loadConfig():
+    global config
+    try:
+        f = open("config.json", "r")
+        config = json.load(f)
+        f.close()
+    except Exception, e:
+        print e
+
+        choice = raw_input("Enter your choice: (import or export, default is export) ")
+        if not choice:
+            choice = "export"
+        config["choice"] = choice
+
+        leanote_host = raw_input("Enter your host: (default is http://leanote.com) ")
+        if not leanote_host:
+            leanote_host = 'https://leanote.com' #使用http://leanote.com会报503错误
+        config["host"] = leanote_host
+
+        leanote_email = raw_input('Enter your email: ')
+        config["email"] = leanote_email
+
+        leanote_password = raw_input('Enter your password: ')
+        config["password"] = leanote_password
+
+        path = raw_input("Enter your save path: (default is current dir) ")
+        if not path:
+            path = '.'
+        config["path"] = path
 
 if __name__ == '__main__':
-    choice = raw_input("Enter your choice: (import or export) ")
-
-    leanote_host = raw_input("Enter your host: (default is http://leanote.com) ")
-    if not leanote_host:
-        leanote_host = 'https://leanote.com' #使用http://leanote.com会报503错误
-    leanote_email = raw_input('Enter your email: ')
-    leanote_password = raw_input('Enter your password: ')
-    path = raw_input("Enter your save path: (default is current dir) ")
-    if not path:
-        path = '.'
-
-    # leanote_host='http://leanote.com'
-    # leanote_email='admin@leanote.com'
-    # leanote_password='abc123'
-    # path = '.'
-
-    print 'Connecting to %s' %leanote_host
-    leanote_token = login(leanote_email, leanote_password)
+    loadConfig()
+    print config
+    print 'Connecting to %s' % config["host"]
+    leanote_token = login(config["email"], config["password"])
     local_zone=tz.tzlocal()
 
-    if choice == 'import':
-        LeanoteImportFromMD(path)
+    if config['choice'] == 'import':
+        LeanoteImportFromMD(config['path'])
         exit()
 
-    elif choice == 'export':
-        LeanoteExportToMD(path)
+    elif config['choice'] == 'export':
+        LeanoteExportToMD(config['path'])
         exit()
 
     else:
         print 'command format: \npython Leanote4MD.py import\npython Leanote4MD.py export'
-
-
-
-
-
-
-
-
 
